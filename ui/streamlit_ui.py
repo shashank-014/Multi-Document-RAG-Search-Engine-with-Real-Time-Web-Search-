@@ -24,6 +24,12 @@ ROUTE_LABELS = {
     "hybrid": "🔀 Hybrid answer",
 }
 
+ROUTE_STYLES = {
+    "document": "route-doc",
+    "web": "route-web",
+    "hybrid": "route-hybrid",
+}
+
 PAGE_TITLE = "Hybrid Multi-Document RAG Search Engine"
 PAGE_SUBTITLE = "Ask questions across internal documents and real-time web search"
 
@@ -98,16 +104,14 @@ def _parse_wiki_topics(raw_topics: str) -> list[str]:
     return [line.strip() for line in raw_topics.splitlines() if line.strip()]
 
 
-def _get_indexed_titles() -> list[str]:
+def _get_library_titles() -> list[str]:
     ignored = {".keep", "sample_document.txt", "source_manifest.json"}
-    disk_files = [path.name for path in DATA_DIR.glob("*") if path.is_file() and path.name not in ignored]
-    manifest_files = st.session_state.get("uploaded_files", [])
-    return sorted(dict.fromkeys(disk_files + manifest_files))
+    return sorted([path.name for path in DATA_DIR.glob("*") if path.is_file() and path.name not in ignored])
 
 
 def _get_indexed_sources() -> dict[str, list[str]]:
     return {
-        "files": _get_indexed_titles(),
+        "files": sorted(dict.fromkeys(st.session_state.get("uploaded_files", []))),
         "wiki_topics": sorted(dict.fromkeys(st.session_state.get("indexed_wiki_topics", []))),
     }
 
@@ -180,24 +184,40 @@ def _run_query(query: str, use_web: bool) -> dict[str, object]:
     }
 
 
-def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
-    with st.sidebar:
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.subheader("About")
-        st.markdown("**Hybrid Multi-Document RAG Search Engine**")
-        st.write("This assistant can:")
-        st.write("• Answer questions from uploaded documents")
-        st.write("• Search the web using Tavily")
-        st.write("• Combine internal evidence with live sources")
-        st.write("• Return answers with transparent citations")
-        st.markdown("</div>", unsafe_allow_html=True)
+def _route_badge(route: str) -> str:
+    css_class = ROUTE_STYLES.get(route, "route-doc")
+    label = ROUTE_LABELS.get(route, route)
+    return f'<span class="route-badge {css_class}">{label}</span>'
 
-        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.subheader("How to Use")
-        st.write("1. Upload PDF, TXT, or Markdown files")
-        st.write("2. Add Wikipedia topics if needed")
-        st.write("3. Click Index Sources")
-        st.write("4. Ask questions in the chat")
+
+def _metric_card(label: str, value: str, tone: str = "") -> str:
+    css_class = f"metric-card {tone}".strip()
+    return f'<div class="{css_class}"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>'
+
+
+def _format_source_name(name: str, limit: int = 34) -> str:
+    if len(name) <= limit:
+        return name
+    return name[: limit - 3] + "..."
+
+
+def _split_answer_and_sources(answer_text: str) -> tuple[str, list[str]]:
+    if "Sources:" not in answer_text:
+        return answer_text.strip(), []
+
+    body, source_block = answer_text.split("Sources:", maxsplit=1)
+    sources = [item.strip() for item in source_block.split(";") if item.strip()]
+    return body.strip(), sources
+
+
+def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
+    indexed_sources = _get_indexed_sources()
+    library_files = _get_library_titles()
+
+    with st.sidebar:
+        st.markdown('<div class="sidebar-section sidebar-hero">', unsafe_allow_html=True)
+        st.markdown("### Hybrid RAG Copilot")
+        st.caption("Search across indexed documents, Wikipedia topics, and live Tavily results from one chat interface.")
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
@@ -212,26 +232,34 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
         wiki_topics_raw = st.text_area(
             "Wikipedia Topics",
             placeholder="Enter one topic per line",
-            help="Optional encyclopedia sources that will be added to the index.",
+            help="Optional encyclopedia sources that will be added to the active index.",
         )
         use_web = st.toggle("Enable Web Search", value=True)
+        st.caption("Each indexing run replaces the active index with the sources selected above.")
         index_clicked = st.button("Index Sources", use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
-        st.subheader("Indexed Sources")
-        indexed_sources = _get_indexed_sources()
+        st.subheader("Active Index")
         if indexed_sources["files"]:
             st.markdown("**Files**")
             for source in indexed_sources["files"]:
-                st.write(f"- {source}")
+                st.markdown(f'<div class="source-pill">{_format_source_name(source)}</div>', unsafe_allow_html=True)
         if indexed_sources["wiki_topics"]:
             st.markdown("**Wikipedia**")
             for topic in indexed_sources["wiki_topics"]:
-                st.write(f"- {topic}")
+                st.markdown(f'<div class="source-pill source-pill-wiki">{_format_source_name(topic)}</div>', unsafe_allow_html=True)
         if not indexed_sources["files"] and not indexed_sources["wiki_topics"]:
-            st.caption("No indexed sources yet")
+            st.caption("No active index yet")
         st.markdown("</div>", unsafe_allow_html=True)
+
+        with st.expander("Available in data/documents", expanded=False):
+            if library_files:
+                st.caption("These files exist locally, but they are not necessarily part of the active index.")
+                for source in library_files:
+                    st.write(f"- {source}")
+            else:
+                st.caption("No local files found.")
 
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.subheader("Controls")
@@ -241,8 +269,36 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
     return uploaded_files or [], _parse_wiki_topics(wiki_topics_raw), use_web, index_clicked, clear_chat
 
 
+def _render_empty_state(use_web: bool) -> None:
+    web_text = "Enabled" if use_web else "Disabled"
+    st.markdown('<div class="hero-card">', unsafe_allow_html=True)
+    st.markdown(f"<div class='hero-kicker'>Production-style hybrid retrieval</div>", unsafe_allow_html=True)
+    st.title(PAGE_TITLE)
+    st.caption(PAGE_SUBTITLE)
+    metrics = st.columns(3)
+    with metrics[0]:
+        st.markdown(_metric_card("Active files", str(len(_get_indexed_sources()["files"])), "metric-soft"), unsafe_allow_html=True)
+    with metrics[1]:
+        st.markdown(_metric_card("Wikipedia topics", str(len(_get_indexed_sources()["wiki_topics"])), "metric-warm"), unsafe_allow_html=True)
+    with metrics[2]:
+        st.markdown(_metric_card("Web search", web_text, "metric-cool"), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    tips = st.columns(2)
+    with tips[0]:
+        st.markdown('<div class="card helper-card">', unsafe_allow_html=True)
+        st.markdown("### Ask Better Questions")
+        st.write("Use document questions for internal material, web questions for current events, and hybrid questions when you want both.")
+        st.markdown("</div>", unsafe_allow_html=True)
+    with tips[1]:
+        st.markdown('<div class="card helper-card">', unsafe_allow_html=True)
+        st.markdown("### What You Can Index")
+        st.write("PDF, TXT, Markdown, and optional Wikipedia topics can all feed the active index.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _render_chat_history() -> None:
-    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    st.markdown('<div class="chat-shell">', unsafe_allow_html=True)
     for message in st.session_state.messages:
         avatar = "👤" if message["role"] == "user" else "🤖"
         bubble_class = "chat-user" if message["role"] == "user" else "chat-ai"
@@ -254,41 +310,50 @@ def _render_chat_history() -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _render_summary_cards(summaries: list[dict[str, object]]) -> None:
+    if not summaries:
+        return
+
+    st.markdown("### Top Documents")
+    for item in summaries:
+        score = item.get("similarity_score")
+        rerank = item.get("rerank_score")
+        score_text = f"FAISS: {score:.4f}" if isinstance(score, float) else "FAISS: n/a"
+        rerank_text = f"Rerank: {rerank:.4f}" if isinstance(rerank, float) else "Rerank: n/a"
+        st.markdown('<div class="evidence-card summary-card">', unsafe_allow_html=True)
+        st.markdown(f"**{item['title']}**")
+        st.caption(f"{score_text} | {rerank_text}")
+        st.write(item["summary"])
+        st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _render_doc_evidence(doc_evidence: list[dict[str, object]], summaries: list[dict[str, object]]) -> None:
-    if summaries:
-        st.markdown("### Top Documents")
-        for item in summaries:
-            score = item.get("similarity_score")
-            rerank = item.get("rerank_score")
-            score_text = f"FAISS: {score:.4f}" if isinstance(score, float) else "FAISS: n/a"
-            rerank_text = f"Rerank: {rerank:.4f}" if isinstance(rerank, float) else "Rerank: n/a"
-            st.markdown('<div class="evidence-card">', unsafe_allow_html=True)
-            st.markdown(f"**{item['title']}**")
-            st.caption(f"{score_text} | {rerank_text}")
-            st.write(item["summary"])
-            st.markdown("</div>", unsafe_allow_html=True)
+    _render_summary_cards(summaries)
+
+    if summaries and doc_evidence:
         st.divider()
 
     if not doc_evidence:
         st.caption("No document evidence used.")
         return
 
-    for item in doc_evidence:
+    st.markdown("### Retrieved Chunks")
+    for index, item in enumerate(doc_evidence, start=1):
         meta = item["metadata"]
         score = meta.get("similarity_score")
         rerank = meta.get("rerank_score")
         score_text = f"{score:.4f}" if isinstance(score, float) else "n/a"
         rerank_text = f"{rerank:.4f}" if isinstance(rerank, float) else "n/a"
-        st.markdown('<div class="evidence-card">', unsafe_allow_html=True)
-        st.markdown(f"**{item['citation']}**")
-        st.caption(
-            f"Title: {meta.get('document_title', 'Unknown')} | "
-            f"Chunk: {meta.get('chunk_index', 'n/a')} | "
-            f"FAISS score: {score_text} | "
-            f"Rerank score: {rerank_text}"
-        )
-        st.write(item["content"])
-        st.markdown("</div>", unsafe_allow_html=True)
+        with st.expander(f"{index}. {item['citation']}", expanded=index == 1):
+            st.caption(
+                f"Title: {meta.get('document_title', 'Unknown')} | "
+                f"Chunk: {meta.get('chunk_index', 'n/a')} | "
+                f"FAISS score: {score_text} | "
+                f"Rerank score: {rerank_text}"
+            )
+            st.markdown('<div class="evidence-card">', unsafe_allow_html=True)
+            st.write(item["content"])
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_web_evidence(web_evidence: list[dict[str, object]]) -> None:
@@ -296,13 +361,37 @@ def _render_web_evidence(web_evidence: list[dict[str, object]]) -> None:
         st.caption("No web evidence used.")
         return
 
-    for item in web_evidence:
-        st.markdown('<div class="evidence-card evidence-web">', unsafe_allow_html=True)
-        st.markdown(f"**{item['citation']}**")
-        st.write(item["snippet"])
-        if item["url"]:
-            st.markdown(f"[Open source]({item['url']})")
+    st.markdown("### Tavily Results")
+    for index, item in enumerate(web_evidence, start=1):
+        with st.expander(f"{index}. {item['citation']}", expanded=index == 1):
+            st.markdown('<div class="evidence-card evidence-web">', unsafe_allow_html=True)
+            st.write(item["snippet"])
+            if item["url"]:
+                st.markdown(f"[Open source]({item['url']})")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _render_answer_tab(answer_text: str, route: str, summaries: list[dict[str, object]]) -> None:
+    body, sources = _split_answer_and_sources(answer_text)
+    st.markdown(_route_badge(route), unsafe_allow_html=True)
+    st.markdown('<div class="answer-panel">', unsafe_allow_html=True)
+    st.write(body or "No answer generated.")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if sources:
+        st.markdown("### Sources")
+        st.markdown('<div class="source-chip-row">', unsafe_allow_html=True)
+        for source in sources:
+            st.markdown(f'<span class="answer-source-chip">{source}</span>', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+    if summaries:
+        st.markdown("### Quick Source Read")
+        for item in summaries[:2]:
+            st.markdown('<div class="mini-summary-card">', unsafe_allow_html=True)
+            st.markdown(f"**{item['title']}**")
+            st.write(item["summary"])
+            st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _handle_indexing(uploaded_files: list, wiki_topics: list[str]) -> None:
@@ -311,23 +400,15 @@ def _handle_indexing(uploaded_files: list, wiki_topics: list[str]) -> None:
         return
 
     saved_paths = _save_uploaded_files(uploaded_files)
-    existing_names = list(st.session_state.uploaded_files)
-    for path in saved_paths:
-        if path.name not in existing_names:
-            existing_names.append(path.name)
-    st.session_state.uploaded_files = sorted(dict.fromkeys(existing_names))
+    active_files = [path.name for path in saved_paths]
+    active_topics = list(dict.fromkeys(wiki_topics))
 
-    existing_topics = list(st.session_state.indexed_wiki_topics)
-    for topic in wiki_topics:
-        if topic not in existing_topics:
-            existing_topics.append(topic)
-    st.session_state.indexed_wiki_topics = sorted(dict.fromkeys(existing_topics))
-
-    _save_source_manifest(st.session_state.uploaded_files, st.session_state.indexed_wiki_topics)
-
-    chunk_count = _index_sources(saved_paths, wiki_topics)
+    chunk_count = _index_sources(saved_paths, active_topics)
     if chunk_count:
-        st.success(f"Indexed {chunk_count} chunks across local and Wikipedia sources.")
+        st.session_state.uploaded_files = active_files
+        st.session_state.indexed_wiki_topics = active_topics
+        _save_source_manifest(active_files, active_topics)
+        st.success(f"Indexed {chunk_count} chunks across the selected sources.")
     else:
         st.warning("No sources were indexed. Please upload valid files or check the Wikipedia topic names.")
 
@@ -348,21 +429,30 @@ def run_app() -> None:
     if index_clicked:
         _handle_indexing(uploaded_files, wiki_topics)
 
-    header_col, info_col = st.columns([3, 2])
-    with header_col:
-        st.title(PAGE_TITLE)
-        st.caption(PAGE_SUBTITLE)
-    with info_col:
-        st.markdown('<div class="card status-card">', unsafe_allow_html=True)
-        st.markdown("### Search Mode")
-        st.write("Use document retrieval for internal knowledge, Tavily for current information, or hybrid mode for both.")
-        st.markdown("</div>", unsafe_allow_html=True)
+    if not st.session_state.messages:
+        _render_empty_state(use_web)
+    else:
+        header_left, header_right = st.columns([3, 2])
+        with header_left:
+            st.markdown('<div class="compact-hero">', unsafe_allow_html=True)
+            st.markdown(f"<div class='hero-title'>{PAGE_TITLE}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='hero-subtitle'>{PAGE_SUBTITLE}</div>", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
+        with header_right:
+            indexed_sources = _get_indexed_sources()
+            cols = st.columns(3)
+            with cols[0]:
+                st.markdown(_metric_card("Files", str(len(indexed_sources["files"])), "metric-soft"), unsafe_allow_html=True)
+            with cols[1]:
+                st.markdown(_metric_card("Wiki", str(len(indexed_sources["wiki_topics"])), "metric-warm"), unsafe_allow_html=True)
+            with cols[2]:
+                st.markdown(_metric_card("Web", "On" if use_web else "Off", "metric-cool"), unsafe_allow_html=True)
 
     chat_panel = st.container()
     with chat_panel:
         _render_chat_history()
 
-    query = st.chat_input("Ask a question about your documents, Wikipedia topics, or current events...")
+    query = st.chat_input("Ask a question about your active sources, Wikipedia topics, or current events...")
     if not query:
         return
 
@@ -377,28 +467,31 @@ def run_app() -> None:
     result = _run_query(query, use_web)
 
     with st.chat_message("assistant", avatar="🤖"):
-        st.markdown(result["route_label"])
+        st.markdown(_route_badge(result["route"]), unsafe_allow_html=True)
         if result["rewritten"]["was_rewritten"]:
             st.caption(f"Rewritten query: {result['rewritten']['rewritten_query']}")
         for notice in result["notices"]:
             st.warning(notice)
 
         thinking = st.empty()
-        bubble = st.empty()
-        thinking.markdown("Thinking...")
+        live_answer = st.empty()
+        thinking.markdown('<div class="thinking-pill">Thinking...</div>', unsafe_allow_html=True)
         answer_text = ""
         for chunk in stream_answer(query, result["context"], result["memory_text"], citations=result["citations"]):
             answer_text += chunk
-            bubble.markdown(f'<div class="chat-ai">{answer_text}</div>', unsafe_allow_html=True)
+            preview_text, _ = _split_answer_and_sources(answer_text)
+            live_answer.markdown(f'<div class="chat-ai">{preview_text}</div>', unsafe_allow_html=True)
         thinking.empty()
+        live_answer.empty()
 
         answer_tab, doc_tab, web_tab = st.tabs(["Answer", "Document Evidence", "Web Evidence"])
         with answer_tab:
-            st.markdown(f'<div class="chat-ai">{answer_text}</div>', unsafe_allow_html=True)
+            _render_answer_tab(answer_text, result["route"], result["summaries"])
         with doc_tab:
             _render_doc_evidence(result["doc_evidence"], result["summaries"])
         with web_tab:
             _render_web_evidence(result["web_evidence"])
 
-    save_turn(query, answer_text)
-    st.session_state.messages.append({"role": "assistant", "content": answer_text})
+    body_text, _ = _split_answer_and_sources(answer_text)
+    save_turn(query, body_text)
+    st.session_state.messages.append({"role": "assistant", "content": body_text})
