@@ -1,0 +1,2 @@
+This folder stores documents that will be indexed by the Hybrid RAG system.
+Add PDF, TXT, or Markdown files here for ingestion.
