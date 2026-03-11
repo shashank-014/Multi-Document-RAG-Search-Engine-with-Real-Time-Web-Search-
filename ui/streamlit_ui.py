@@ -71,15 +71,32 @@ def _save_source_manifest(files: list[str], wiki_topics: list[str]) -> None:
     SOURCE_MANIFEST_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
-def _ensure_state() -> None:
+def _active_files_on_disk(file_names: list[str]) -> list[str]:
+    active: list[str] = []
+    for name in file_names:
+        if (DATA_DIR / name).exists():
+            active.append(name)
+    return sorted(dict.fromkeys(active))
+
+
+def _sync_active_index_state() -> None:
     manifest = _load_source_manifest()
+    active_files = _active_files_on_disk(manifest["files"])
+    wiki_topics = sorted(dict.fromkeys(manifest["wiki_topics"]))
+
+    st.session_state.uploaded_files = active_files
+    st.session_state.indexed_wiki_topics = wiki_topics
+    _save_source_manifest(active_files, wiki_topics)
+
+    if not active_files and not wiki_topics:
+        st.session_state.vector_store = None
+
+
+def _ensure_state() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
-    if "uploaded_files" not in st.session_state:
-        st.session_state.uploaded_files = manifest["files"]
-    if "indexed_wiki_topics" not in st.session_state:
-        st.session_state.indexed_wiki_topics = manifest["wiki_topics"]
     create_memory()
+    _sync_active_index_state()
 
 
 def _save_uploaded_files(uploaded_files: list) -> list[Path]:
@@ -102,11 +119,6 @@ def _reset_chat() -> None:
 
 def _parse_wiki_topics(raw_topics: str) -> list[str]:
     return [line.strip() for line in raw_topics.splitlines() if line.strip()]
-
-
-def _get_library_titles() -> list[str]:
-    ignored = {".keep", "sample_document.txt", "source_manifest.json"}
-    return sorted([path.name for path in DATA_DIR.glob("*") if path.is_file() and path.name not in ignored])
 
 
 def _get_indexed_sources() -> dict[str, list[str]]:
@@ -134,7 +146,11 @@ def _index_sources(file_paths: list[Path], wiki_topics: list[str]) -> int:
 
 
 def _load_store_from_disk():
-    if "vector_store" not in st.session_state:
+    if not _has_indexed_sources():
+        st.session_state.vector_store = None
+        return None
+
+    if "vector_store" not in st.session_state or st.session_state.vector_store is None:
         st.session_state.vector_store = load_faiss_index()
     return st.session_state.vector_store
 
@@ -210,9 +226,15 @@ def _split_answer_and_sources(answer_text: str) -> tuple[str, list[str]]:
     return body.strip(), sources
 
 
+def _render_nav_links() -> None:
+    st.markdown(
+        '<div class="page-nav"><a href="#top-anchor">Back to top</a><a href="#latest-anchor">Jump to latest</a></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
     indexed_sources = _get_indexed_sources()
-    library_files = _get_library_titles()
 
     with st.sidebar:
         st.markdown('<div class="sidebar-section sidebar-hero">', unsafe_allow_html=True)
@@ -242,11 +264,11 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.subheader("Active Index")
         if indexed_sources["files"]:
-            st.markdown("**Files**")
+            st.markdown("**Files currently in use**")
             for source in indexed_sources["files"]:
                 st.markdown(f'<div class="source-pill">{_format_source_name(source)}</div>', unsafe_allow_html=True)
         if indexed_sources["wiki_topics"]:
-            st.markdown("**Wikipedia**")
+            st.markdown("**Wikipedia currently in use**")
             for topic in indexed_sources["wiki_topics"]:
                 st.markdown(f'<div class="source-pill source-pill-wiki">{_format_source_name(topic)}</div>', unsafe_allow_html=True)
         if not indexed_sources["files"] and not indexed_sources["wiki_topics"]:
@@ -254,12 +276,13 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
         st.markdown("</div>", unsafe_allow_html=True)
 
         with st.expander("Available in data/documents", expanded=False):
-            if library_files:
-                st.caption("These files exist locally, but they are not necessarily part of the active index.")
-                for source in library_files:
+            active_files = indexed_sources["files"]
+            if active_files:
+                st.caption("Only files currently used by the active index are shown here.")
+                for source in active_files:
                     st.write(f"- {source}")
             else:
-                st.caption("No local files found.")
+                st.caption("No active document files in use.")
 
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.subheader("Controls")
@@ -272,7 +295,6 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
 def _render_empty_state(use_web: bool) -> None:
     web_text = "Enabled" if use_web else "Disabled"
     st.markdown('<div class="hero-card">', unsafe_allow_html=True)
-    st.markdown(f"<div class='hero-kicker'>Production-style hybrid retrieval</div>", unsafe_allow_html=True)
     st.title(PAGE_TITLE)
     st.caption(PAGE_SUBTITLE)
     metrics = st.columns(3)
@@ -419,6 +441,7 @@ def run_app() -> None:
     _ensure_state()
     st.set_page_config(page_title=PAGE_TITLE, layout="wide")
     _load_css()
+    st.markdown('<div id="top-anchor"></div>', unsafe_allow_html=True)
 
     uploaded_files, wiki_topics, use_web, index_clicked, clear_chat = _render_sidebar()
 
@@ -428,6 +451,8 @@ def run_app() -> None:
 
     if index_clicked:
         _handle_indexing(uploaded_files, wiki_topics)
+
+    _render_nav_links()
 
     if not st.session_state.messages:
         _render_empty_state(use_web)
@@ -452,6 +477,7 @@ def run_app() -> None:
     with chat_panel:
         _render_chat_history()
 
+    st.markdown('<div id="latest-anchor"></div>', unsafe_allow_html=True)
     query = st.chat_input("Ask a question about your active sources, Wikipedia topics, or current events...")
     if not query:
         return

@@ -15,6 +15,23 @@
     padding-bottom: 1.5rem;
 }
 
+.page-nav {
+    display: flex;
+    gap: 12px;
+    justify-content: flex-end;
+    margin-bottom: 10px;
+}
+
+.page-nav a {
+    color: #35506a;
+    font-size: 0.88rem;
+    text-decoration: none;
+    background: rgba(255, 255, 255, 0.8);
+    border: 1px solid rgba(185, 197, 212, 0.8);
+    border-radius: 999px;
+    padding: 6px 12px;
+}
+
 .card,
 .sidebar-section,
 .hero-card,
@@ -61,16 +78,6 @@
     border-radius: 24px;
     padding: 24px;
     margin-bottom: 20px;
-}
-
-.hero-kicker {
-    display: inline-block;
-    background: rgba(34, 87, 122, 0.08);
-    color: #244965;
-    border-radius: 999px;
-    padding: 6px 10px;
-    font-size: 0.82rem;
-    margin-bottom: 10px;
 }
 
 .compact-hero {
@@ -252,5 +259,10 @@ button[kind="secondary"] {
 
     .metric-card {
         min-height: 78px;
+    }
+
+    .page-nav {
+        justify-content: flex-start;
+        flex-wrap: wrap;
     }
 }
