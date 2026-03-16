@@ -68,6 +68,12 @@ flowchart TD
 - Generation layer creates grounded responses with source-aware output.
 - UI layer streams responses and exposes route/evidence transparency.
 
+### Query Flow by Mode
+
+- `document`: query -> FAISS retrieval -> reranking -> context -> Groq answer
+- `web`: query -> Tavily search -> context -> Groq answer
+- `hybrid`: query -> FAISS + Tavily -> balanced context assembly -> Groq answer
+
 ## Repository Structure
 
 ```text
@@ -114,6 +120,45 @@ hybrid-rag-search/
 |   |-- source_manifest.json
 ```
 
+## Important Files and Roles
+
+### Entry and Configuration
+
+- `app.py`: Streamlit entrypoint that launches the UI app.
+- `config.py`: shared constants, directory paths, model names, and secret helper access.
+
+### Ingestion and Processing
+
+- `ingestion/schema.py`: normalized document and evidence models used across the pipeline.
+- `ingestion/loaders.py`: multi-source loaders (PDF/TXT/Markdown/Wikipedia) plus metadata normalization.
+- `ingestion/cleaner.py`: text normalization and artifact cleanup before chunking.
+- `indexing/chunking.py`: recursive chunking with overlap and chunk metadata enrichment.
+
+### Embeddings and Vector Store
+
+- `indexing/vector_store.py`: embedding initialization, FAISS index creation, persistence, and reload.
+
+### Retrieval and Routing
+
+- `retrieval/query_router.py`: rule-based routing into document, web, or hybrid mode.
+- `retrieval/query_rewriter.py`: rewrites short or vague queries for better retrieval quality.
+- `retrieval/semantic_search.py`: FAISS similarity search with retrieval score metadata.
+- `retrieval/reranker.py`: cross-encoder reranking to improve final evidence ordering.
+
+### Web, RAG, and Response
+
+- `web/tavily_search.py`: Tavily integration and structured web result formatting.
+- `rag/context_builder.py`: merges, balances, and dedupes doc/web evidence into prompt context.
+- `rag/answer_generator.py`: Groq-based answer generation with streaming-style output and fallback handling.
+- `rag/citation_formatter.py`: consistent citation labels for document and web evidence.
+- `rag/memory.py`: session memory helpers for follow-up questions.
+- `rag/summarizer.py`: concise summaries for top retrieved documents.
+
+### UI and Presentation
+
+- `ui/streamlit_ui.py`: end-to-end UI orchestration (upload, index, chat, evidence tabs, state sync).
+- `ui/style.css`: visual styling for layout, cards, evidence blocks, and chat presentation.
+
 ## Setup
 
 1. Create and activate a Python 3 environment.
@@ -148,7 +193,7 @@ streamlit run app.py
 1. Upload one or more documents (multi-PDF supported).
 2. Optionally add Wikipedia topics.
 3. Click `Index Sources` to build active index.
-4. Ask question in chat.
+4. Ask a question in chat.
 5. System routes query (`document` / `web` / `hybrid`).
 6. Response streams in real time.
 7. User inspects evidence in tabs.
@@ -175,7 +220,7 @@ Hybrid:
 ## Evaluation Artifacts
 
 - `evaluation/test_queries.py`: scenario query set
-- `evaluation/evaluation_report.md`: strengths, limitations, future improvements
+- `evaluation/evaluation_report.md`: strengths, limitations, and future improvements
 
 ## Notes
 
