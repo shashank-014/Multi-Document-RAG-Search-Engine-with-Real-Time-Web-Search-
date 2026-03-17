@@ -95,6 +95,8 @@ def _sync_active_index_state() -> None:
 def _ensure_state() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
+    if "last_chunk_breakdown" not in st.session_state:
+        st.session_state.last_chunk_breakdown = {}
     create_memory()
     _sync_active_index_state()
 
@@ -133,16 +135,24 @@ def _has_indexed_sources() -> bool:
     return bool(sources["files"] or sources["wiki_topics"])
 
 
-def _index_sources(file_paths: list[Path], wiki_topics: list[str]) -> int:
+def _build_chunk_breakdown(chunks: list) -> dict[str, int]:
+    breakdown: dict[str, int] = {}
+    for chunk in chunks:
+        title = chunk.metadata.get("document_title") or chunk.metadata.get("title") or "Untitled source"
+        breakdown[title] = breakdown.get(title, 0) + 1
+    return dict(sorted(breakdown.items(), key=lambda item: item[0].lower()))
+
+
+def _index_sources(file_paths: list[Path], wiki_topics: list[str]) -> tuple[int, dict[str, int]]:
     records = load_sources(file_paths, wiki_topics=wiki_topics)
     if not records:
-        return 0
+        return 0, {}
 
     st.session_state.ingested_records = records
     chunks = chunk_documents(records)
     store = index_documents(chunks)
     st.session_state.vector_store = store
-    return len(chunks)
+    return len(chunks), _build_chunk_breakdown(chunks)
 
 
 def _load_store_from_disk():
@@ -274,6 +284,15 @@ def _render_sidebar() -> tuple[list, list[str], bool, bool, bool]:
         if not indexed_sources["files"] and not indexed_sources["wiki_topics"]:
             st.caption("No active index yet")
         st.markdown("</div>", unsafe_allow_html=True)
+
+        if st.session_state.get("last_chunk_breakdown"):
+            st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+            st.subheader("Latest Chunk Stats")
+            total_chunks = sum(st.session_state.last_chunk_breakdown.values())
+            st.caption(f"Total chunks: {total_chunks}")
+            for title, count in st.session_state.last_chunk_breakdown.items():
+                st.write(f"- {title}: {count}")
+            st.markdown("</div>", unsafe_allow_html=True)
 
         with st.expander("Available in data/documents", expanded=False):
             active_files = indexed_sources["files"]
@@ -425,13 +444,18 @@ def _handle_indexing(uploaded_files: list, wiki_topics: list[str]) -> None:
     active_files = [path.name for path in saved_paths]
     active_topics = list(dict.fromkeys(wiki_topics))
 
-    chunk_count = _index_sources(saved_paths, active_topics)
+    chunk_count, chunk_breakdown = _index_sources(saved_paths, active_topics)
     if chunk_count:
         st.session_state.uploaded_files = active_files
         st.session_state.indexed_wiki_topics = active_topics
+        st.session_state.last_chunk_breakdown = chunk_breakdown
         _save_source_manifest(active_files, active_topics)
         st.success(f"Indexed {chunk_count} chunks across the selected sources.")
+        with st.expander("Chunk breakdown by source", expanded=True):
+            for title, count in chunk_breakdown.items():
+                st.write(f"- {title}: {count}")
     else:
+        st.session_state.last_chunk_breakdown = {}
         st.warning("No sources were indexed. Please upload valid files or check the Wikipedia topic names.")
 
 
